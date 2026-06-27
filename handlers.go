@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -24,7 +27,7 @@ func logRequest(next http.Handler) http.Handler {
 	})
 }
 
-func (h *TaskSever) getTasks(w http.ResponseWriter, r *http.Request) {
+func (h *TaskServer) getTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	h.mu.Lock()
@@ -38,13 +41,43 @@ func (h *TaskSever) getTasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(h.tasks)
 }
 
-func (h *TaskSever) postTasks(w http.ResponseWriter, r *http.Request) {
+func (h *TaskServer) getTasksById(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, `{"error": "Invalid task ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for _, task := range h.tasks {
+		if task.ID == id {
+			json.NewEncoder(w).Encode(task)
+			return
+		}
+	}
+
+	http.Error(w, `"error":"Task not found"`, http.StatusNotFound)
+}
+
+func (h *TaskServer) postTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	var newTask Task
 
 	if err := json.NewDecoder(r.Body).Decode(&newTask); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if errors.Is(err, io.EOF) {
+			http.Error(w, `{"error": "Empty request body"}`, http.StatusBadRequest)
+			return
+		}
+		http.Error(w, `{"error": "Malformed JSON syntax"}`, http.StatusBadRequest)
+		return
+	}
+
+	if newTask.Title == "" {
+		http.Error(w, `{"error": "Missing required field: title"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -59,4 +92,63 @@ func (h *TaskSever) postTasks(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newTask)
+}
+
+func (h *TaskServer) updateTask(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, `{"error": "Invalid task ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	var updatedInput Task
+	if err := json.NewDecoder(r.Body).Decode(&updatedInput); err != nil {
+		http.Error(w, `{"error": "Malformed JSON syntax"}`, http.StatusBadRequest)
+		return
+	}
+
+	if updatedInput.Title == "" {
+		http.Error(w, `{"error": "Title field cannot be empty"}`, http.StatusBadRequest)
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for i, task := range h.tasks {
+		if task.ID == id {
+			// Update properties but keep the original ID and Creation date
+			h.tasks[i].Title = updatedInput.Title
+			h.tasks[i].Completed = updatedInput.Completed
+
+			json.NewEncoder(w).Encode(h.tasks[i])
+			return
+		}
+	}
+
+	http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+}
+
+func (h *TaskServer) deleteTask(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, `{"error": "Invalid task ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for i, task := range h.tasks {
+		if task.ID == id {
+			h.tasks = append(h.tasks[:i], h.tasks[i+1:]...)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
 }

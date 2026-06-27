@@ -12,7 +12,7 @@ type Task struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-type TaskSever struct {
+type TaskServer struct {
 	mu     sync.Mutex
 	tasks  []Task
 	nextID int
