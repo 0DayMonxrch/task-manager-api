@@ -14,10 +14,13 @@ import (
 func main() {
 	mux := http.NewServeMux()
 
-	manager := &TaskServer{
-		tasks:  []Task{},
-		nextID: 1,
+	db, err := InitDB("./tasks.db")
+	if err != nil {
+		log.Fatalf("Database initialization failed: %v", err)
 	}
+	defer db.Close()
+
+	manager := &TaskServer{db: db}
 
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /tasks", manager.getTasks)
@@ -27,7 +30,7 @@ func main() {
 	mux.HandleFunc("DELETE /tasks/{id}", manager.deleteTask)
 
 	loggedMux := logRequest(mux)
-	
+
 	srv := &http.Server{
 		Addr:    ":8080",
 		Handler: loggedMux,
@@ -51,6 +54,11 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	log.Println("Closing database connections...")
+	if err := db.Close(); err != nil {
+		log.Printf("Error closing database: %v", err)
 	}
 
 	log.Println("Server cleanly stopped.")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -30,15 +31,24 @@ func logRequest(next http.Handler) http.Handler {
 func (h *TaskServer) getTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if len(h.tasks) == 0 {
-		w.Write([]byte("[]"))
+	rows, err := h.db.Query("SELECT id, title, completed, created_at FROM tasks")
+	if err != nil {
+		http.Error(w, `{"error": "Failed to query tasks"}`, http.StatusInternalServerError)
 		return
 	}
+	defer rows.Close()
 
-	json.NewEncoder(w).Encode(h.tasks)
+	tasks := []Task{}
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt); err != nil {
+			http.Error(w, `{"error": "Failed to scan tasks"}`, http.StatusInternalServerError)
+			return
+		}
+		tasks = append(tasks, t)
+	}
+
+	json.NewEncoder(w).Encode(tasks)
 }
 
 func (h *TaskServer) getTasksById(w http.ResponseWriter, r *http.Request) {
@@ -49,25 +59,27 @@ func (h *TaskServer) getTasksById(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	var t Task
+	err = h.db.QueryRow("SELECT id, title, completed, created_at FROM tasks WHERE id = ?", id).
+		Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt)
 
-	for _, task := range h.tasks {
-		if task.ID == id {
-			json.NewEncoder(w).Encode(task)
-			return
-		}
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, `{"error": "Database error"}`, http.StatusInternalServerError)
+		return
 	}
 
-	http.Error(w, `"error":"Task not found"`, http.StatusNotFound)
+	json.NewEncoder(w).Encode(t)
 }
 
 func (h *TaskServer) postTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	var newTask Task
-
-	if err := json.NewDecoder(r.Body).Decode(&newTask); err != nil {
+	err := json.NewDecoder(r.Body).Decode(&newTask)
+	if err != nil {
 		if errors.Is(err, io.EOF) {
 			http.Error(w, `{"error": "Empty request body"}`, http.StatusBadRequest)
 			return
@@ -81,14 +93,19 @@ func (h *TaskServer) postTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	newTask.ID = h.nextID
-	h.nextID++
 	newTask.CreatedAt = time.Now()
 
-	h.tasks = append(h.tasks, newTask)
+	result, err := h.db.Exec("INSERT INTO tasks (title, completed, created_at) VALUES (?, ?, ?)",
+		newTask.Title, newTask.Completed, newTask.CreatedAt)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to save task"}`, http.StatusInternalServerError)
+		return
+	}
+
+	lastID, err := result.LastInsertId()
+	if err == nil {
+		newTask.ID = int(lastID)
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newTask)
@@ -113,42 +130,45 @@ func (h *TaskServer) updateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	for i, task := range h.tasks {
-		if task.ID == id {
-			// Update properties but keep the original ID and Creation date
-			h.tasks[i].Title = updatedInput.Title
-			h.tasks[i].Completed = updatedInput.Completed
-
-			json.NewEncoder(w).Encode(h.tasks[i])
-			return
-		}
+	result, err := h.db.Exec("UPDATE tasks SET title = ?, completed = ? WHERE id = ?",
+		updatedInput.Title, updatedInput.Completed, id)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to update task"}`, http.StatusInternalServerError)
+		return
 	}
 
-	http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil || rowsAffected == 0 {
+		http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Fetch the updated resource to echo back
+	h.db.QueryRow("SELECT id, title, completed, created_at FROM tasks WHERE id = ?", id).
+		Scan(&updatedInput.ID, &updatedInput.Title, &updatedInput.Completed, &updatedInput.CreatedAt)
+
+	json.NewEncoder(w).Encode(updatedInput)
 }
 
 func (h *TaskServer) deleteTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, `{"error": "Invalid task ID"}`, http.StatusBadRequest)
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	for i, task := range h.tasks {
-		if task.ID == id {
-			h.tasks = append(h.tasks[:i], h.tasks[i+1:]...)
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
+	result, err := h.db.Exec("DELETE FROM tasks WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to delete task"}`, http.StatusInternalServerError)
+		return
 	}
 
-	http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil || rowsAffected == 0 {
+		http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
