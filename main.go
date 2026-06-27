@@ -8,9 +8,14 @@ import (
 func main() {
 	mux := http.NewServeMux()
 
+	server := &TaskSever{
+		tasks:  []Task{},
+		nextID: 1,
+	}
+
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("GET /tasks", getTasks)
-	mux.HandleFunc("POST /tasks", postTasks)
+	mux.HandleFunc("GET /tasks", server.getTasks)
+	mux.HandleFunc("POST /tasks", server.postTasks)
 
 	loggedMux := logRequest(mux)
 	log.Println("Server running on :8080")

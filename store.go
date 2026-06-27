@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 type Task struct {
 	ID        int       `json:"id"`
@@ -9,5 +12,8 @@ type Task struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-var tasks []Task
-var nextID = 1
+type TaskSever struct {
+	mu     sync.Mutex
+	tasks  []Task
+	nextID int
+}

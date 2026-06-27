@@ -24,18 +24,21 @@ func logRequest(next http.Handler) http.Handler {
 	})
 }
 
-func getTasks(w http.ResponseWriter, r *http.Request) {
+func (h *TaskSever) getTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if len(tasks) == 0 {
-		w.Write([]byte("No Tasks Found!"))
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.tasks) == 0 {
+		w.Write([]byte("[]"))
 		return
 	}
 
-	json.NewEncoder(w).Encode(tasks)
+	json.NewEncoder(w).Encode(h.tasks)
 }
 
-func postTasks(w http.ResponseWriter, r *http.Request) {
+func (h *TaskSever) postTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	var newTask Task
@@ -45,12 +48,14 @@ func postTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newTask.ID = nextID
-	nextID++
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	newTask.ID = h.nextID
+	h.nextID++
 	newTask.CreatedAt = time.Now()
 
-	tasks = append(tasks, newTask)
-
+	h.tasks = append(h.tasks, newTask)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newTask)
