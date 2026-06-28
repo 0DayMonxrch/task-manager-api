@@ -9,27 +9,31 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/0DayMonxrch/task-manager-api/internal/database"
+	"github.com/0DayMonxrch/task-manager-api/internal/handlers"
+	"github.com/0DayMonxrch/task-manager-api/internal/repository"
 )
 
 func main() {
-	mux := http.NewServeMux()
-
-	db, err := InitDB("./tasks.db")
+	db, err := database.InitDB("./tasks.db")
 	if err != nil {
 		log.Fatalf("Database initialization failed: %v", err)
 	}
 	defer db.Close()
 
-	manager := &TaskServer{db: db}
+	repo := repository.NewTaskRepository(db)
+	taskHandler := handlers.NewTaskHandler(repo)
 
-	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("GET /tasks", manager.getTasks)
-	mux.HandleFunc("GET /tasks/{id}", manager.getTasksById)
-	mux.HandleFunc("POST /tasks", manager.postTasks)
-	mux.HandleFunc("PUT /tasks/{id}", manager.updateTask)
-	mux.HandleFunc("DELETE /tasks/{id}", manager.deleteTask)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", taskHandler.HandleHealth)
+	mux.HandleFunc("GET /tasks", taskHandler.GetTasks)
+	mux.HandleFunc("GET /tasks/{id}", taskHandler.GetTaskById)
+	mux.HandleFunc("POST /tasks", taskHandler.PostTasks)
+	mux.HandleFunc("PUT /tasks/{id}", taskHandler.UpdateTask)
+	mux.HandleFunc("DELETE /tasks/{id}", taskHandler.DeleteTask)
 
-	loggedMux := logRequest(mux)
+	loggedMux := taskHandler.LogRequest(mux)
 
 	srv := &http.Server{
 		Addr:    ":8080",
